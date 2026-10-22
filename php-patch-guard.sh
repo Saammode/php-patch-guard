@@ -14,9 +14,16 @@
 # License:  MIT
 # -----------------------------------------------------------------------------
 
-set -Eeuo pipefail
+set -uo pipefail
+# NOTE: deliberately NOT using `set -e` / an ERR trap. This tool legitimately
+# runs many commands that return non-zero as normal signals (grep no-match,
+# a missing file/glob, dpkg/version comparisons, a declined prompt). With
+# `set -e` + an ERR trap those benign returns — including ones inside command
+# substitutions, where the trap fires in the subshell — abort the whole run.
+# Instead, every state-changing path checks results explicitly (upgrade exit
+# status, config-test before restart), so safety does not depend on `set -e`.
 
-PPG_VERSION="1.0.2"
+PPG_VERSION="1.0.3"
 
 # --- The vulnerability this tool checks for -----------------------------------
 CVE_A="CVE-2026-109618"
@@ -80,14 +87,6 @@ err()  { printf '%s %s\n' "$(red '✗')" "$*" >&2; log "ERR  $*"; }
 ok()   { printf '%s %s\n' "$(grn '✓')" "$*"; log "OK   $*"; }
 
 die() { err "$*"; exit "$EX_USAGE"; }
-
-on_err() {
-  local ec=$?
-  err "Unexpected failure (line $1, exit $ec). Nothing further will run."
-  err "Re-run with --log /tmp/ppg.log and share that file if you need help."
-  exit "$EX_FAILED"
-}
-trap 'on_err $LINENO' ERR
 
 # --- Usage --------------------------------------------------------------------
 usage() {
@@ -249,23 +248,25 @@ apt_installed_version() { # $1 = package
 # string when detected, empty otherwise. (PPG_TEST_SOURCES overrides the files
 # read, for tests.)
 os_eol_reason() {
-  local src=""
+  local src="" f files=()
   if [[ -n "${PPG_TEST_SOURCES:-}" ]]; then
-    src="$(cat "$PPG_TEST_SOURCES" 2>/dev/null)"
+    files=("$PPG_TEST_SOURCES")
   else
-    src="$(cat /etc/apt/sources.list 2>/dev/null; \
-           cat /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; \
-           cat /etc/yum.repos.d/*.repo 2>/dev/null)"
+    files=(/etc/apt/sources.list \
+           /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+           /etc/yum.repos.d/*.repo)
   fi
-  if grep -q 'old-releases\.ubuntu\.com' <<<"$src"; then
-    echo "Ubuntu release is end-of-life (apt is pulling from old-releases.ubuntu.com)"; return 0
-  fi
-  if grep -q 'archive\.debian\.org' <<<"$src"; then
-    echo "Debian release is end-of-life (apt is pulling from archive.debian.org)"; return 0
-  fi
-  if grep -q 'vault\.\(centos\|almalinux\|rockylinux\)\.org' <<<"$src"; then
-    echo "RHEL-family release is end-of-life (repos are on a vault/archive host)"; return 0
-  fi
+  # Only read files that actually exist — an unmatched glob leaves the literal
+  # pattern in the list, so guard with -f (and never let a read fail the run).
+  for f in "${files[@]}"; do
+    [[ -f "$f" ]] && src+="$(cat "$f" 2>/dev/null)"$'\n'
+  done
+  # Pattern-match (not grep) so there is no exit code or pipe to mishandle.
+  case "$src" in
+    *old-releases.ubuntu.com*) echo "Ubuntu release is end-of-life (apt is pulling from old-releases.ubuntu.com)" ;;
+    *archive.debian.org*)      echo "Debian release is end-of-life (apt is pulling from archive.debian.org)" ;;
+    *vault.centos.org*|*vault.almalinux.org*|*vault.rockylinux.org*) echo "RHEL-family release is end-of-life (repos are on a vault/archive host)" ;;
+  esac
   return 0
 }
 

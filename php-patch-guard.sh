@@ -16,7 +16,7 @@
 
 set -Eeuo pipefail
 
-PPG_VERSION="1.0.0"
+PPG_VERSION="1.0.1"
 
 # --- The vulnerability this tool checks for -----------------------------------
 CVE_A="CVE-2026-109618"
@@ -703,8 +703,9 @@ revert_mitigation() {
 # -----------------------------------------------------------------------------
 install_self() {
   [[ "$(id -u)" -eq 0 ]] || die "Installing needs root: sudo $0 --install"
-  local src; src="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-  if [[ ! -f "$src" ]]; then
+  local self="${BASH_SOURCE[0]:-}"
+  local src; src="$(readlink -f "$self" 2>/dev/null || echo "$self")"
+  if [[ -z "$src" || ! -f "$src" ]]; then
     err "Can't locate the script file to install (did you run it via a pipe?)."
     err "Clone the repo and run: sudo ./php-patch-guard.sh --install"
     return "$EX_FAILED"
@@ -783,7 +784,10 @@ main() {
   esac
 }
 
-# Run main only when executed directly, so tests can source the functions.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Run main when executed directly OR piped to bash (curl | bash), but NOT when
+# sourced (so tests can load the functions). When piped via stdin, BASH_SOURCE
+# is unset — ${BASH_SOURCE[0]:-$0} defaults it to $0 so the guard is true and,
+# crucially, doesn't trip `set -u` with an unbound-variable error.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   main "$@"
 fi

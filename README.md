@@ -265,6 +265,12 @@ them as `EOL`. Your options:
    `check-update` reports an update (exit 100); otherwise *unknown*/*eol*.
 4. **source build:** compares `PHP_VERSION` against the upstream fixed table
    (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35).
+5. **EOL OS:** if the fix isn't present *and* no update is offered *and* the
+   package repos have been moved to an archive host (`old-releases.ubuntu.com`,
+   `archive.debian.org`, a `vault` host), it reports **`EOL OS`** — the release
+   itself is end-of-life, so no php2shell fix will ever come via the package
+   manager. The fix is to mitigate (`--mitigate`) and migrate the server to a
+   supported OS release.
 
 ---
 

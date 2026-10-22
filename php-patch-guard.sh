@@ -16,7 +16,7 @@
 
 set -Eeuo pipefail
 
-PPG_VERSION="1.0.1"
+PPG_VERSION="1.0.2"
 
 # --- The vulnerability this tool checks for -----------------------------------
 CVE_A="CVE-2026-109618"
@@ -243,6 +243,32 @@ apt_installed_version() { # $1 = package
   dpkg-query -W -f='${Version}' "$1" 2>/dev/null || true
 }
 
+# If the OS release itself is end-of-life, its package repos stop getting
+# security fixes, so no php2shell patch will ever be offered via apt/dnf. The
+# tell-tale is the repos being moved to an archive host. Returns a human reason
+# string when detected, empty otherwise. (PPG_TEST_SOURCES overrides the files
+# read, for tests.)
+os_eol_reason() {
+  local src=""
+  if [[ -n "${PPG_TEST_SOURCES:-}" ]]; then
+    src="$(cat "$PPG_TEST_SOURCES" 2>/dev/null)"
+  else
+    src="$(cat /etc/apt/sources.list 2>/dev/null; \
+           cat /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+           cat /etc/yum.repos.d/*.repo 2>/dev/null)"
+  fi
+  if grep -q 'old-releases\.ubuntu\.com' <<<"$src"; then
+    echo "Ubuntu release is end-of-life (apt is pulling from old-releases.ubuntu.com)"; return 0
+  fi
+  if grep -q 'archive\.debian\.org' <<<"$src"; then
+    echo "Debian release is end-of-life (apt is pulling from archive.debian.org)"; return 0
+  fi
+  if grep -q 'vault\.\(centos\|almalinux\|rockylinux\)\.org' <<<"$src"; then
+    echo "RHEL-family release is end-of-life (repos are on a vault/archive host)"; return 0
+  fi
+  return 0
+}
+
 # -----------------------------------------------------------------------------
 # DETECTION — Debian / Ubuntu
 # -----------------------------------------------------------------------------
@@ -288,7 +314,12 @@ detect_apt() {
         if is_eol_branch "$br"; then
           state="eol"; detail="PHP $br is end-of-life; no official package fix"
         else
-          state="unknown"; detail="no patched package offered yet by apt (run apt update; or EOL/3rd-party build)"
+          local eolr; eolr="$(os_eol_reason)"
+          if [[ -n "$eolr" ]]; then
+            state="eol-os"; detail="$eolr — apt has no php2shell fix to offer. Mitigate now (--mitigate), then migrate the OS."
+          else
+            state="unknown"; detail="no patched package offered yet by apt (run 'apt update'; or EOL/3rd-party build)"
+          fi
         fi
       fi
     fi
@@ -391,7 +422,7 @@ run_detection() {
 # Reporting
 # -----------------------------------------------------------------------------
 overall_state() {
-  local any_vuln=0 any_unknown=0 any_eol=0 n=${#DET_STATE[@]}
+  local any_vuln=0 any_unknown=0 any_eol=0 any_eolos=0 n=${#DET_STATE[@]}
   [[ "$n" -eq 0 ]] && { echo "none"; return; }
   local s
   for s in "${DET_STATE[@]}"; do
@@ -399,9 +430,11 @@ overall_state() {
       vulnerable) any_vuln=1 ;;
       unknown)    any_unknown=1 ;;
       eol)        any_eol=1 ;;
+      eol-os)     any_eolos=1 ;;
     esac
   done
   if [[ "$any_vuln" == 1 ]]; then echo "vulnerable"
+  elif [[ "$any_eolos" == 1 ]]; then echo "eol-os"
   elif [[ "$any_eol" == 1 ]]; then echo "eol"
   elif [[ "$any_unknown" == 1 ]]; then echo "unknown"
   else echo "patched"; fi
@@ -422,6 +455,7 @@ print_report() {
     case "${DET_STATE[$i]}" in
       patched)    tag="$(grn PATCHED)   " ;;
       vulnerable) tag="$(red VULNERABLE)" ;;
+      eol-os)     tag="$(red 'EOL OS')    " ;;
       eol)        tag="$(red EOL)       " ;;
       *)          tag="$(ylw UNKNOWN)   " ;;
     esac
@@ -539,10 +573,11 @@ apt_refresh() {
 }
 
 do_upgrade() {
-  local n=${#DET_STATE[@]} i svcs="" pkgs_all=""
+  local n=${#DET_STATE[@]} i svcs="" pkgs_all="" eol_os=0
 
   # Build the set of packages to upgrade from vulnerable/unknown entries.
   for i in $(seq 0 $((n-1))); do
+    [[ "${DET_STATE[$i]}" == "eol-os" ]] && eol_os=1
     case "${DET_STATE[$i]}" in
       vulnerable|unknown)
         pkgs_all+=" ${DET_PKGS[$i]}"
@@ -551,11 +586,17 @@ do_upgrade() {
     esac
   done
 
-  # do_upgrade is only reached when the overall state is vulnerable/unknown/eol,
-  # so there IS something exposed. If apt collected no packages, the exposed PHP
-  # is a non-package (source / 3rd-party) build we cannot upgrade for them — do
-  # NOT exit 0, or automation keying on the exit code would read "all patched".
+  # do_upgrade is only reached when the overall state is vulnerable/unknown/eol*,
+  # so there IS something exposed. If apt collected no packages, either the OS is
+  # EOL (no fix will ever come) or the PHP is a non-package build — in both cases
+  # do NOT exit 0, or automation keying on the exit code would read "all patched".
   if [[ -z "${pkgs_all// }" && "$PKG" != "dnf" && "$PKG" != "yum" ]]; then
+    if [[ "$eol_os" == 1 ]]; then
+      warn "This OS release is end-of-life, so apt has no php2shell fix to install."
+      warn "  1) Mitigate now:   sudo $0 --mitigate"
+      warn "  2) Migrate this server to a supported OS release (the real fix)."
+      return "$EX_NEEDS"
+    fi
     warn "The exposed PHP here was not installed via apt (compiled from source or"
     warn "a 3rd-party build), so this tool cannot upgrade it automatically."
     warn "Update it to the fixed version at its source, then re-run --check."
@@ -767,6 +808,10 @@ main() {
   if [[ "$MODE" == "check" ]]; then
     case "$ov" in
       patched|none) ok "Nothing to do — not exposed to $NICKNAME."; exit "$EX_OK" ;;
+      eol-os)
+        warn "This OS release is end-of-life — apt cannot fix $NICKNAME here."
+        warn "Mitigate now (sudo $0 --mitigate), then migrate to a supported OS release."
+        exit "$EX_NEEDS" ;;
       *) warn "Exposure found. Re-run with --update to fix (it will ask before changing anything)."; exit "$EX_NEEDS" ;;
     esac
   fi

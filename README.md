@@ -51,8 +51,37 @@ comparing against the upstream fixed versions.
 
 ## Run it in one command
 
-**Private repo (as it is now):** `git` uses the server's existing GitHub login, so
-one line clones and checks:
+### One-liner (`curl | bash` — the bash equivalent of PowerShell's `irm url | iex`)
+
+**Requires the script to be publicly reachable** (make the repo public, or host the
+raw file somewhere public). Then, to download *just the script* and run a read-only
+check — safe to pipe, because check mode changes nothing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Saammode/php-patch-guard/main/php-patch-guard.sh | sudo bash -s -- --check
+```
+
+To apply the fix, don't pipe it — piping leaves no terminal for the confirmation
+prompt. Either download then run (so you can read it first and answer the prompt):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Saammode/php-patch-guard/main/php-patch-guard.sh
+sudo bash php-patch-guard.sh --update
+```
+
+…or, for unattended runs, pipe with `--yes` (no prompt — make sure you trust it):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Saammode/php-patch-guard/main/php-patch-guard.sh | sudo bash -s -- --yes
+```
+
+> While the repo is **private**, use the `git clone` one-liner below instead — `git`
+> authenticates with the server's existing GitHub login, which `curl` to the raw URL
+> does not.
+
+### Private repo (as it is now): clone + run
+
+`git` uses the server's existing GitHub login, so one line clones and checks:
 
 ```bash
 git clone https://github.com/Saammode/php-patch-guard.git && sudo php-patch-guard/php-patch-guard.sh

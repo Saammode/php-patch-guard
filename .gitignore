@@ -1,0 +1,4 @@
+*.log
+*.deb
+cand_changelog.txt
+.DS_Store

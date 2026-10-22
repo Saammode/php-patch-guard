@@ -49,29 +49,50 @@ comparing against the upstream fixed versions.
 
 ---
 
-## Install & run
+## Run it in one command
 
-Download, **read it**, then run. (It's a security tool that runs as root — always
-look at what you're about to run.)
+**Private repo (as it is now):** `git` uses the server's existing GitHub login, so
+one line clones and checks:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Saammode/php-patch-guard/main/php-patch-guard.sh
-less php-patch-guard.sh          # inspect it
-chmod +x php-patch-guard.sh
-
-# 1) Just check — changes nothing:
-sudo ./php-patch-guard.sh
-
-# 2) Fix it — shows the plan, asks, then upgrades + restarts + verifies:
-sudo ./php-patch-guard.sh --update
+git clone https://github.com/Saammode/php-patch-guard.git && sudo php-patch-guard/php-patch-guard.sh
 ```
 
-Or clone the repo:
+Add `--update` to fix instead of just check:
+
+```bash
+git clone https://github.com/Saammode/php-patch-guard.git && sudo php-patch-guard/php-patch-guard.sh --update
+```
+
+**Install once, then it's a single word everywhere:**
+
+```bash
+git clone https://github.com/Saammode/php-patch-guard.git && sudo php-patch-guard/php-patch-guard.sh --install
+# from now on, on that server:
+sudo php-patch-guard            # check
+sudo php-patch-guard --update   # fix (asks first)
+```
+
+**If you make the repo public**, you get a true `curl` one-liner (read-only check —
+safe to pipe because it changes nothing):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Saammode/php-patch-guard/main/php-patch-guard.sh | sudo bash -s -- --check
+```
+
+> Piping to `bash` can't show the interactive confirm prompt, so for applying a fix
+> use the installed command (`sudo php-patch-guard --update`) or add `--yes` to the
+> pipe. Either way, **inspect the script once before trusting it as root** — it's
+> short and commented.
+
+### Manual (inspect first, recommended for the apply step)
 
 ```bash
 git clone https://github.com/Saammode/php-patch-guard.git
 cd php-patch-guard
-sudo ./php-patch-guard.sh
+less php-patch-guard.sh          # read it
+sudo ./php-patch-guard.sh        # check — changes nothing
+sudo ./php-patch-guard.sh --update   # shows plan, asks, then fixes
 ```
 
 ---
@@ -118,7 +139,9 @@ After you confirm, it upgrades, restarts, re-checks, and reports:
 | `--update`, `--fix` | Detect, show the plan, **ask**, then upgrade + restart + verify. |
 | `-y`, `--yes` | Apply without the prompt (for cron / automation). Implies `--update`. |
 | `--mitigate` | Apply the temporary stopgap (disable `session.upload_progress`) instead of upgrading — only if you can't patch yet. |
-| `--revert-mitigation` | Remove a stopgap this tool previously applied. |
+| `--revert-mitigation` | Remove a stopgap this tool previously applied (asks first). |
+| `--install` | Copy the script to `/usr/local/sbin/php-patch-guard` so later runs are just `sudo php-patch-guard`. |
+| `--uninstall` | Remove the installed copy. |
 | `--no-restart` | Upgrade/mitigate but don't restart services (you restart during a maintenance window). |
 | `--json` | Machine-readable status output (for monitoring / Ansible). |
 | `--no-color` | Plain output. |

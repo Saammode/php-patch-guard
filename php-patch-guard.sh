@@ -54,6 +54,7 @@ REVERT_MITIGATION=0
 COLOR=1
 LOG_FILE=""
 MITIGATION_DIR_TAG="99-php-patch-guard"
+INSTALL_PATH="/usr/local/sbin/php-patch-guard"
 
 # --- Output helpers -----------------------------------------------------------
 if [[ ! -t 1 ]]; then COLOR=0; fi
@@ -106,6 +107,9 @@ OPTIONS
   --mitigate         Apply the temporary stopgap (disable session.upload_progress)
                      instead of upgrading. Use only if you cannot patch yet.
   --revert-mitigation Remove a stopgap previously applied by this tool.
+  --install          Copy this script to $INSTALL_PATH so you can
+                     then just run 'sudo php-patch-guard' from anywhere.
+  --uninstall        Remove the installed copy.
   --no-restart       Upgrade/mitigate but do NOT restart web services (you restart later).
   --json             Machine-readable output (status report). Implies no prompts.
   --no-color         Disable colored output.
@@ -139,6 +143,8 @@ parse_args() {
       -y|--yes)            MODE="apply"; ASSUME_YES=1 ;;
       --mitigate)          MODE="apply"; MITIGATE=1 ;;
       --revert-mitigation) MODE="apply"; REVERT_MITIGATION=1 ;;
+      --install)           MODE="install" ;;
+      --uninstall)         MODE="uninstall" ;;
       --no-restart)        DO_RESTART=0 ;;
       --json)              JSON=1; COLOR=0 ;;
       --no-color)          COLOR=0 ;;
@@ -693,11 +699,48 @@ revert_mitigation() {
 }
 
 # -----------------------------------------------------------------------------
+# Self-install: make the tool a global command so later runs are one word.
+# -----------------------------------------------------------------------------
+install_self() {
+  [[ "$(id -u)" -eq 0 ]] || die "Installing needs root: sudo $0 --install"
+  local src; src="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+  if [[ ! -f "$src" ]]; then
+    err "Can't locate the script file to install (did you run it via a pipe?)."
+    err "Clone the repo and run: sudo ./php-patch-guard.sh --install"
+    return "$EX_FAILED"
+  fi
+  if install -m 0755 "$src" "$INSTALL_PATH" 2>/dev/null; then
+    ok "Installed to $INSTALL_PATH"
+    say "Now run it from anywhere:"
+    say "  sudo php-patch-guard            # check only"
+    say "  sudo php-patch-guard --update   # show plan, ask, then fix"
+    return "$EX_OK"
+  fi
+  err "Could not write $INSTALL_PATH (need root, and the dir must exist)."
+  return "$EX_FAILED"
+}
+
+uninstall_self() {
+  [[ "$(id -u)" -eq 0 ]] || die "Uninstalling needs root: sudo $0 --uninstall"
+  if [[ -e "$INSTALL_PATH" ]]; then
+    rm -f "$INSTALL_PATH" && ok "Removed $INSTALL_PATH" || { err "could not remove $INSTALL_PATH"; return "$EX_FAILED"; }
+  else
+    warn "Nothing installed at $INSTALL_PATH"
+  fi
+  return "$EX_OK"
+}
+
+# -----------------------------------------------------------------------------
 # main
 # -----------------------------------------------------------------------------
 main() {
   parse_args "$@"
   [[ -n "$LOG_FILE" ]] && { : >>"$LOG_FILE" || die "cannot write log $LOG_FILE"; log "=== php-patch-guard $PPG_VERSION start ==="; }
+
+  # install/uninstall are standalone and don't need OS/PHP detection.
+  local rc0=0
+  if [[ "$MODE" == "install" ]]; then install_self || rc0=$?; exit "$rc0"; fi
+  if [[ "$MODE" == "uninstall" ]]; then uninstall_self || rc0=$?; exit "$rc0"; fi
 
   detect_os
   if [[ -z "$PKG" && "$MODE" == "apply" ]]; then
